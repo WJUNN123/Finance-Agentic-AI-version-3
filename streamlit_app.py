@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 import os
 
+# These imports will fail if the other files are not in the same directory.
+# Make sure crypto_analyzer.py and config.py are present.
 from crypto_analyzer import CryptoAnalyzer, ResultFormatter
 from config import Config, SUPPORTED_CRYPTOS
 
@@ -69,7 +71,7 @@ def load_analyzer(csv_path=None):
     return CryptoAnalyzer(csv_file_path=csv_path)
 
 def create_price_chart(historical_data: pd.DataFrame, forecast_data: List[Dict], 
-                      symbol: str) -> go.Figure:
+                       symbol: str) -> go.Figure:
     """Create an interactive price chart with forecast"""
     fig = make_subplots(
         rows=2, cols=1,
@@ -375,79 +377,68 @@ def main():
                         pos_size = data['recommendation']['position_size']
                         if pos_size > 0:
                             st.write(f"💰 **Suggested Position Size**: {pos_size}%")
+
+                    with col2:
+                        st.subheader("📊 Confidence Breakdown")
+                        confidence_chart = create_confidence_chart(data['confidence_breakdown'])
+                        st.plotly_chart(confidence_chart, use_container_width=True)
+
+                with tab2:
+                    st.subheader("🔮 7-Day Price Forecast")
                     
+                    if data['forecast']:
+                        historical_df = analyzer.data_fetcher.fetch_historical_data(symbol, days=30)
+                        price_chart = create_price_chart(historical_df, data['forecast'], data['symbol'])
+                        st.plotly_chart(price_chart, use_container_width=True)
+                        
+                        st.subheader("📅 Detailed Forecast")
+                        forecast_df = create_forecast_table(data['forecast'], data['current_price'])
+                        st.dataframe(forecast_df, use_container_width=True)
+                    else:
+                        st.warning("Forecast data not available. This could be due to insufficient historical data.")
+
+                with tab3:
+                    st.subheader("⚡ Technical Analysis")
+                    tech = data['technical']
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("RSI", f"{tech['rsi']:.1f}", tech['rsi_signal'])
                     with col2:
                         st.metric("MACD Signal", tech['macd_signal'], None)
-                    
                     with col3:
                         st.metric("Market Regime", tech['market_regime'].title(), None)
                     
-                    # Technical details
                     st.write("**Technical Summary:**")
                     st.write(f"- **Trend**: {tech['trend']}")
                     st.write(f"- **Technical Signal**: {tech['technical_signal']} ({'Bullish' if tech['technical_signal'] > 20 else 'Bearish' if tech['technical_signal'] < -20 else 'Neutral'})")
                     
-                    # Create technical indicators chart
-                    if not analyzer.data_fetcher.fetch_historical_data(symbol, days=30).empty:
-                        hist_data = analyzer.data_fetcher.fetch_historical_data(symbol, days=30)
-                        
-                        fig_tech = make_subplots(
-                            rows=3, cols=1,
-                            subplot_titles=['Price & Moving Averages', 'RSI', 'Volume'],
-                            vertical_spacing=0.1,
-                            row_heights=[0.5, 0.25, 0.25]
-                        )
+                    hist_data_tech = analyzer.data_fetcher.fetch_historical_data(symbol, days=30)
+                    if not hist_data_tech.empty:
+                        fig_tech = make_subplots(rows=3, cols=1, subplot_titles=['Price & Moving Averages', 'RSI', 'Volume'], vertical_spacing=0.1, row_heights=[0.5, 0.25, 0.25])
                         
                         # Price and moving averages
-                        fig_tech.add_trace(
-                            go.Scatter(x=hist_data.index, y=hist_data['price'], 
-                                     name='Price', line=dict(color='blue')), 
-                            row=1, col=1
-                        )
-                        
-                        # Calculate and plot moving averages
-                        if len(hist_data) >= 7:
-                            sma_7 = hist_data['price'].rolling(7).mean()
-                            fig_tech.add_trace(
-                                go.Scatter(x=hist_data.index, y=sma_7, 
-                                         name='SMA 7', line=dict(color='orange', dash='dash')), 
-                                row=1, col=1
-                            )
-                        
-                        if len(hist_data) >= 21:
-                            sma_21 = hist_data['price'].rolling(21).mean()
-                            fig_tech.add_trace(
-                                go.Scatter(x=hist_data.index, y=sma_21, 
-                                         name='SMA 21', line=dict(color='red', dash='dot')), 
-                                row=1, col=1
-                            )
-                        
+                        fig_tech.add_trace(go.Scatter(x=hist_data_tech.index, y=hist_data_tech['price'], name='Price', line=dict(color='blue')), row=1, col=1)
+                        if len(hist_data_tech) >= 7:
+                            sma_7 = hist_data_tech['price'].rolling(7).mean()
+                            fig_tech.add_trace(go.Scatter(x=hist_data_tech.index, y=sma_7, name='SMA 7', line=dict(color='orange', dash='dash')), row=1, col=1)
+                        if len(hist_data_tech) >= 21:
+                            sma_21 = hist_data_tech['price'].rolling(21).mean()
+                            fig_tech.add_trace(go.Scatter(x=hist_data_tech.index, y=sma_21, name='SMA 21', line=dict(color='red', dash='dot')), row=1, col=1)
+                            
                         # RSI
-                        if len(hist_data) >= 14:
-                            delta = hist_data['price'].diff()
+                        if len(hist_data_tech) >= 14:
+                            delta = hist_data_tech['price'].diff()
                             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
                             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
                             rs = gain / (loss + 1e-8)
                             rsi = 100 - (100 / (1 + rs))
-                            
-                            fig_tech.add_trace(
-                                go.Scatter(x=hist_data.index, y=rsi, 
-                                         name='RSI', line=dict(color='purple')), 
-                                row=2, col=1
-                            )
-                            
-                            # RSI levels
-                            fig_tech.add_hline(y=70, line_dash="dash", line_color="red", 
-                                             annotation_text="Overbought", row=2, col=1)
-                            fig_tech.add_hline(y=30, line_dash="dash", line_color="green", 
-                                             annotation_text="Oversold", row=2, col=1)
+                            fig_tech.add_trace(go.Scatter(x=hist_data_tech.index, y=rsi, name='RSI', line=dict(color='purple')), row=2, col=1)
+                            fig_tech.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought", row=2, col=1)
+                            fig_tech.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold", row=2, col=1)
                         
                         # Volume
-                        fig_tech.add_trace(
-                            go.Bar(x=hist_data.index, y=hist_data['volume'], 
-                                  name='Volume', marker_color='lightblue'), 
-                            row=3, col=1
-                        )
+                        fig_tech.add_trace(go.Bar(x=hist_data_tech.index, y=hist_data_tech['volume'], name='Volume', marker_color='lightblue'), row=3, col=1)
                         
                         fig_tech.update_layout(height=600, showlegend=True, title="Technical Indicators")
                         fig_tech.update_yaxes(title_text="Price (USD)", row=1, col=1)
@@ -455,17 +446,14 @@ def main():
                         fig_tech.update_yaxes(title_text="Volume", row=3, col=1)
                         
                         st.plotly_chart(fig_tech, use_container_width=True)
-                
+
                 with tab4:
                     st.subheader("📰 Market Sentiment")
-                    
                     sentiment = data['sentiment']
                     
                     col1, col2 = st.columns(2)
-                    
                     with col1:
                         st.metric("Sentiment Score", f"{sentiment['score']:.3f}", sentiment['label'])
-                    
                     with col2:
                         st.metric("News Headlines", sentiment['headline_count'], None)
                     
@@ -486,39 +474,4 @@ def main():
                 logger.error(f"Analysis error: {e}", exc_info=True)
 
 if __name__ == "__main__":
-                main():
-                        st.subheader("📊 Confidence Breakdown")
-                        confidence_chart = create_confidence_chart(data['confidence_breakdown'])
-                        st.plotly_chart(confidence_chart, use_container_width=True)
-                
-                with tab2:
-                    st.subheader("🔮 7-Day Price Forecast")
-                    
-                    if data['forecast']:
-                        # Get historical data for chart
-                        historical_df = analyzer.data_fetcher.fetch_historical_data(symbol, days=30)
-                        
-                        # Create price chart
-                        price_chart = create_price_chart(
-                            historical_df, data['forecast'], data['symbol']
-                        )
-                        st.plotly_chart(price_chart, use_container_width=True)
-                        
-                        # Forecast table
-                        st.subheader("📅 Detailed Forecast")
-                        forecast_df = create_forecast_table(data['forecast'], data['current_price'])
-                        st.dataframe(forecast_df, use_container_width=True)
-                    else:
-                        st.warning("Forecast data not available. This could be due to insufficient historical data.")
-                
-                with tab3:
-                    st.subheader("⚡ Technical Analysis")
-                    
-                    tech = data['technical']
-                    
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("RSI", f"{tech['rsi']:.1f}", tech['rsi_signal'])
-                    
-                    with col2
+    main()
