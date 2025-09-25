@@ -486,7 +486,7 @@ def main():
                 logger.error(f"Analysis error: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    main():
+                main():
                         st.subheader("📊 Confidence Breakdown")
                         confidence_chart = create_confidence_chart(data['confidence_breakdown'])
                         st.plotly_chart(confidence_chart, use_container_width=True)
