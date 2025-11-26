@@ -7,7 +7,6 @@ import numpy as np
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional
-import random # Added for mock data generation
 from config import Config, SUPPORTED_CRYPTOS, MARKET_RANKS
 
 logger = logging.getLogger(__name__)
@@ -49,36 +48,19 @@ class DataFetcher:
             return False
         return (datetime.now() - self.cache[key]['timestamp']).seconds < Config.CACHE_DURATION
 
-    # --- NEW: SAFETY NET FUNCTION ---
-    def _get_mock_data(self, symbol: str) -> Dict:
-        """Generate mock data when API rate limits are hit (Safety Net)"""
-        logger.warning(f"⚠️ RATE LIMIT HIT: Generating mock data for {symbol}")
-        
-        # Base prices for realism
-        base_prices = {
-            'bitcoin': 65000, 'ethereum': 3500, 'solana': 145, 
-            'binancecoin': 600, 'ripple': 0.60, 'cardano': 0.45, 
-            'dogecoin': 0.15
-        }
-        
-        base = base_prices.get(symbol.lower(), 100)
-        current = base * random.uniform(0.95, 1.05)
-        
-        return {
-            'current_price': current,
-            'price_change_24h': random.uniform(-5.0, 5.0),
-            'market_cap': current * 10000000,
-            'volume_24h': current * 500000,
-            'is_mock': True # Flag to let us know it's fake
-        }
-
     def _get_realtime_data(self, symbol: str) -> Optional[Dict]:
-        """Fetch real-time data from CoinGecko API with Fallback"""
+        """Fetch real-time data from CoinGecko API"""
         coingecko_mapping = {
-            'bitcoin': 'bitcoin', 'ethereum': 'ethereum', 'solana': 'solana',
-            'binancecoin': 'binancecoin', 'ripple': 'ripple', 'cardano': 'cardano',
-            'dogecoin': 'dogecoin', 'avalanche-2': 'avalanche-2',
-            'chainlink': 'chainlink', 'polkadot': 'polkadot'
+            'bitcoin': 'bitcoin',
+            'ethereum': 'ethereum',
+            'solana': 'solana',
+            'binancecoin': 'binancecoin',
+            'ripple': 'ripple',
+            'cardano': 'cardano',
+            'dogecoin': 'dogecoin',
+            'avalanche-2': 'avalanche-2',
+            'chainlink': 'chainlink',
+            'polkadot': 'polkadot'
         }
 
         coingecko_id = coingecko_mapping.get(symbol.lower(), symbol.lower())
@@ -123,9 +105,7 @@ class DataFetcher:
                 return realtime_data
 
         except Exception as e:
-            logger.warning(f"Failed to fetch real-time data: {e}. Switching to Mock Data.")
-            # FALLBACK: Return mock data instead of crashing
-            return self._get_mock_data(symbol)
+            logger.warning(f"Failed to fetch real-time data: {e}")
 
         return None
 
@@ -151,10 +131,16 @@ class DataFetcher:
             return {}
 
         symbol_mappings = {
-            'ethereum': 'ETHEREUM', 'bitcoin': 'BITCOIN', 'btc': 'BITCOIN',
-            'eth': 'ETHEREUM', 'solana': 'SOLANA', 'sol': 'SOLANA',
-            'binancecoin': 'BINANCECOIN', 'bnb': 'BINANCECOIN',
-            'ripple': 'RIPPLE', 'xrp': 'RIPPLE'
+            'ethereum': 'ETHEREUM',
+            'bitcoin': 'BITCOIN',
+            'btc': 'BITCOIN',
+            'eth': 'ETHEREUM',
+            'solana': 'SOLANA',
+            'sol': 'SOLANA',
+            'binancecoin': 'BINANCECOIN',
+            'bnb': 'BINANCECOIN',
+            'ripple': 'RIPPLE',
+            'xrp': 'RIPPLE'
         }
 
         search_symbol = symbol_mappings.get(symbol, symbol.upper())
@@ -220,18 +206,7 @@ class DataFetcher:
             
         except Exception as e:
             logger.error(f"Failed to fetch API data for {symbol}: {e}")
-            # Simplified mock data structure for main API call
-            mock = self._get_mock_data(symbol)
-            return {
-                'market_data': {
-                    'current_price': {'usd': mock['current_price']},
-                    'market_cap': {'usd': mock['market_cap']},
-                    'price_change_percentage_24h': mock['price_change_24h'],
-                    'total_volume': {'usd': mock['volume_24h']},
-                    'market_cap_rank': 1
-                },
-                'market_cap_rank': 1
-            }
+            return {}
 
     def fetch_historical_data(self, symbol: str = "ethereum", days: int = 90) -> pd.DataFrame:
         """Fetch historical price data"""
@@ -252,10 +227,16 @@ class DataFetcher:
             return pd.DataFrame()
 
         symbol_mappings = {
-            'ethereum': 'ETHEREUM', 'bitcoin': 'BITCOIN', 'btc': 'BITCOIN',
-            'eth': 'ETHEREUM', 'solana': 'SOLANA', 'sol': 'SOLANA',
-            'binancecoin': 'BINANCECOIN', 'bnb': 'BINANCECOIN',
-            'ripple': 'RIPPLE', 'xrp': 'RIPPLE'
+            'ethereum': 'ETHEREUM',
+            'bitcoin': 'BITCOIN',
+            'btc': 'BITCOIN',
+            'eth': 'ETHEREUM',
+            'solana': 'SOLANA',
+            'sol': 'SOLANA',
+            'binancecoin': 'BINANCECOIN',
+            'bnb': 'BINANCECOIN',
+            'ripple': 'RIPPLE',
+            'xrp': 'RIPPLE'
         }
 
         search_symbol = symbol_mappings.get(symbol, symbol.upper())
@@ -355,23 +336,4 @@ class DataFetcher:
             
         except Exception as e:
             logger.error(f"Failed to fetch historical data from API: {e}")
-            
-            # Mock Historical Data
-            dates = pd.date_range(end=datetime.now(), periods=days)
-            mock_price = self._get_mock_data(symbol)['current_price']
-            
-            # Create a random walk for prices
-            prices = [mock_price]
-            for _ in range(days - 1):
-                change = random.uniform(-0.05, 0.05)
-                prices.append(prices[-1] * (1 + change))
-            prices = prices[::-1] # Reverse so oldest is first
-            
-            df = pd.DataFrame({
-                'price': prices,
-                'volume': [mock_price * 1000] * days,
-                'market_cap': [mock_price * 1000000] * days,
-                'high': prices, 'low': prices, 'open': prices
-            }, index=dates)
-            
-            return df
+            return pd.DataFrame()
