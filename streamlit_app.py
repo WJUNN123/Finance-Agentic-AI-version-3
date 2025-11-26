@@ -25,12 +25,16 @@ st.set_page_config(
     page_title=Config.PAGE_TITLE,
     page_icon=Config.PAGE_ICON,
     layout=Config.LAYOUT,
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed" # Collapsed by default
 )
 
 # Custom CSS
 st.markdown("""
 <style>
+    /* Hide the default Streamlit sidebar button since we aren't using it */
+    [data-testid="stSidebarNav"] {display: none;}
+    section[data-testid="stSidebar"] {display: none;}
+
     .metric-container {
         background-color: #f0f2f6;
         border-radius: 10px;
@@ -71,7 +75,7 @@ def load_analyzer(csv_path=None):
     return CryptoAnalyzer(csv_file_path=csv_path)
 
 def create_price_chart(historical_data: pd.DataFrame, forecast_data: List[Dict], 
-                       symbol: str) -> go.Figure:
+                        symbol: str) -> go.Figure:
     """Create an interactive price chart with forecast"""
     fig = make_subplots(
         rows=2, cols=1,
@@ -135,34 +139,6 @@ def create_price_chart(historical_data: pd.DataFrame, forecast_data: List[Dict],
     
     return fig
 
-def create_confidence_chart(confidence_scores: Dict) -> go.Figure:
-    """Create a radar chart for confidence scores"""
-    categories = list(confidence_scores.keys())
-    values = list(confidence_scores.values())
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatterpolar(
-        r=values,
-        theta=categories,
-        fill='toself',
-        name='Confidence Scores',
-        line_color='rgba(102, 126, 234, 0.8)',
-        fillcolor='rgba(102, 126, 234, 0.3)'
-    ))
-    
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 100]
-            )),
-        showlegend=True,
-        title="Analysis Confidence Breakdown"
-    )
-    
-    return fig
-
 def create_forecast_table(forecast_data: List[Dict], current_price: float) -> pd.DataFrame:
     """Create a formatted forecast table"""
     if not forecast_data:
@@ -221,39 +197,28 @@ def main():
     st.title("🚀 Crypto Investment Analyzer")
     st.markdown("*Ask about BTC, ETH, SOL, etc. This app renders a single, clean Summary dashboard. Educational only — not financial advice.*")
     
-    # Sidebar
-    with st.sidebar:
-        st.header("⚙️ Configuration")
+    # --- MOVED CONFIGURATION TO EXPANDER ---
+    with st.expander("⚙️ Settings & Shortcuts (Data Upload, Quick Coins)", expanded=False):
+        col_set1, col_set2 = st.columns(2)
         
-        # CSV file upload
-        uploaded_file = st.file_uploader(
-            "Upload Historical Data (CSV)", 
-            type=['csv'],
-            help="Upload your historical crypto data CSV file"
-        )
-        
-        # Quick coin selection
-        st.subheader("Quick Coins")
-        quick_coins = ['Bitcoin', 'Ethereum', 'Solana', 'BNB', 'XRP', 'Cardano', 'Dogecoin']
-        
-        cols = st.columns(2)
-        for i, coin in enumerate(quick_coins):
-            if cols[i % 2].button(coin, key=f"quick_{coin}"):
-                st.session_state['selected_coin'] = coin.lower()
-        
-        # Suggested prompts
-        st.subheader("Suggested Prompts")
-        prompts = [
-            "ETH 7-day forecast",
-            "Should I buy BTC?", 
-            "SOL sentiment and risks",
-            "ADA next week outlook"
-        ]
-        
-        for prompt in prompts:
-            if st.button(prompt, key=f"prompt_{prompt}"):
-                st.session_state['user_input'] = prompt
-    
+        with col_set1:
+            st.subheader("Upload Data")
+            uploaded_file = st.file_uploader(
+                "Upload Historical Data (CSV)", 
+                type=['csv'],
+                help="Upload your historical crypto data CSV file"
+            )
+
+        with col_set2:
+            st.subheader("Quick Coins")
+            quick_coins = ['Bitcoin', 'Ethereum', 'Solana', 'BNB', 'XRP', 'Cardano', 'Dogecoin']
+            # Display buttons in a flex-wrap style using columns
+            qc_cols = st.columns(4)
+            for i, coin in enumerate(quick_coins):
+                if qc_cols[i % 4].button(coin, key=f"quick_{coin}"):
+                    st.session_state['selected_coin'] = coin.lower()
+                    st.session_state['user_input'] = f"Should I buy {coin}?" # Auto-fill prompt
+
     # Main input
     st.subheader("Your message")
     user_input = st.text_input(
@@ -359,29 +324,33 @@ def main():
                     st.subheader("💡 Analysis Summary")
                     st.write(data['recommendation']['reasoning'])
                     
-                    col1, col2 = st.columns(2)
+                    st.markdown("---")
                     
-                    with col1:
-                        st.subheader("🛡️ Risk Management")
-                        risk_data = data['risk_management']
-                        
+                    # --- REMOVED CONFIDENCE BREAKDOWN / RESTRUCTURED RISK ---
+                    st.subheader("🛡️ Risk Management")
+                    risk_data = data['risk_management']
+                    
+                    # Create 3 columns for risk metrics
+                    r_col1, r_col2, r_col3 = st.columns(3)
+                    
+                    with r_col1:
                         if risk_data['stop_loss']:
-                            st.write(f"🔻 **Stop Loss**: ${risk_data['stop_loss']:,.2f}")
-                        if risk_data['take_profit']:
-                            st.write(f"🎯 **Take Profit**: ${risk_data['take_profit']:,.2f}")
+                            st.metric("🔻 Stop Loss", f"${risk_data['stop_loss']:,.2f}")
                         if risk_data['support_level']:
-                            st.write(f"📊 **Support Level**: ${risk_data['support_level']:,.2f}")
+                            st.metric("📊 Support Level", f"${risk_data['support_level']:,.2f}")
+
+                    with r_col2:
+                        if risk_data['take_profit']:
+                            st.metric("🎯 Take Profit", f"${risk_data['take_profit']:,.2f}")
                         if risk_data['resistance_level']:
-                            st.write(f"📈 **Resistance Level**: ${risk_data['resistance_level']:,.2f}")
-                        
+                            st.metric("📈 Resistance Level", f"${risk_data['resistance_level']:,.2f}")
+                            
+                    with r_col3:
                         pos_size = data['recommendation']['position_size']
                         if pos_size > 0:
-                            st.write(f"💰 **Suggested Position Size**: {pos_size}%")
-
-                    with col2:
-                        st.subheader("📊 Confidence Breakdown")
-                        confidence_chart = create_confidence_chart(data['confidence_breakdown'])
-                        st.plotly_chart(confidence_chart, use_container_width=True)
+                            st.metric("💰 Sug. Position Size", f"{pos_size}%")
+                        else:
+                            st.metric("💰 Sug. Position Size", "0%")
 
                 with tab2:
                     st.subheader("🔮 7-Day Price Forecast")
