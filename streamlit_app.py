@@ -1,4 +1,3 @@
-
 """
 Streamlit UI for Crypto Investment Analysis
 """
