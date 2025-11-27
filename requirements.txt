@@ -12,3 +12,4 @@ plotly
 langchain
 langchain-google-genai
 google-generativeai
+xgboost
