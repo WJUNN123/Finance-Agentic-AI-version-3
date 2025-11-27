@@ -190,9 +190,6 @@ def main():
                         if rm["resistance_level"]:
                             st.write(f"📈 Resistance Level: ${rm['resistance_level']:,.2f}")
 
-                    with colB:
-                        # REMOVED: Confidence Breakdown chart
-                        st.info("Confidence breakdown removed as requested.")
 
                 # TAB 2 — Forecast (unchanged)
                 with tab2:
