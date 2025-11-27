@@ -55,7 +55,8 @@ st.markdown("""
 
 @st.cache_resource(ttl=300)
 def load_analyzer(csv_path=None):
-    return CryptoAnalyzer(csv_file_path=csv_path)
+    from crypto_analyzer import CryptoAnalyzer
+    return CryptoAnalyzer()
 
 
 def create_price_chart(historical_data: pd.DataFrame, forecast_data: List[Dict], symbol: str) -> go.Figure:
@@ -196,7 +197,7 @@ def main():
 
         with st.spinner(f"Analyzing {symbol.upper()}..."):
             try:
-                analyzer = load_analyzer(None)
+                analyzer = load_analyzer()
                 formatter = ResultFormatter()
 
                 result = analyzer.analyze(symbol, user_input)
