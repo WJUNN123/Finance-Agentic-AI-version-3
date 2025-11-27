@@ -6,6 +6,85 @@ from gpt_engine import GPTInsightGenerator
 
 logger = logging.getLogger(__name__)
 
+class ConfidenceCalculator:
+    """Calculate confidence scores based on multiple factors"""
+    
+    def __init__(self):
+        self.weights = {
+            'technical': 0.35, 
+            'sentiment': 0.25, 
+            'volume': 0.15,
+            'market_structure': 0.15, 
+            'risk_metrics': 0.10
+        }
+
+    def calculate(self, technical_data: Dict, sentiment_data: Dict, market_data: Dict) -> Dict:
+        scores = {
+            'technical': self._technical_confidence(technical_data),
+            'sentiment': self._sentiment_confidence(sentiment_data),
+            'volume': self._volume_confidence(market_data),
+            'market_structure': self._market_structure_confidence(technical_data),
+            'risk_metrics': self._risk_confidence(technical_data)
+        }
+        overall_confidence = sum(scores[key] * self.weights[key] for key in scores)
+        return {
+            'overall_confidence': round(overall_confidence, 1),
+            'component_scores': scores,
+            'confidence_level': self._confidence_level(overall_confidence)
+        }
+
+    # ----- Internal methods for ConfidenceCalculator -----
+    def _technical_confidence(self, technical: Dict) -> float:
+        if not technical: return 50.0
+        signal_strength = abs(technical.get('technical_signal', 0))
+        rsi_clarity = self._rsi_clarity(technical.get('rsi', 50))
+        trend_consistency = self._trend_consistency(technical)
+        weighted_score = signal_strength*0.4 + rsi_clarity*0.35 + trend_consistency*0.25
+        return round(np.clip(weighted_score, 0, 100), 2)
+
+    def _rsi_clarity(self, rsi: float) -> float:
+        return min(abs(rsi-50)*2, 100)
+
+    def _trend_consistency(self, technical: Dict) -> float:
+        signals=[]
+        macd = technical.get('macd', 0)
+        macd_signal = technical.get('macd_signal', 0)
+        signals.append(1 if macd>macd_signal else -1)
+        sma_7 = technical.get('sma_7', 0)
+        sma_21 = technical.get('sma_21', 0)
+        if sma_7 and sma_21:
+            signals.append(1 if sma_7>sma_21 else -1)
+        if len(signals)>1:
+            return (abs(sum(signals))/len(signals))*100
+        return 50.0
+
+    def _sentiment_confidence(self, sentiment: Dict) -> float:
+        if not sentiment: return 50.0
+        base_conf = sentiment.get('confidence', 0.5)*100
+        strength_bonus = min(abs(sentiment.get('sentiment_score',0))*50,30)
+        return min(base_conf+strength_bonus,100)
+
+    def _volume_confidence(self, market_data: Dict) -> float:
+        return 60.0
+
+    def _market_structure_confidence(self, technical: Dict) -> float:
+        regime = technical.get('market_regime','sideways')
+        return {'bull':80,'bear':80,'volatile':35,'sideways':50}.get(regime,50)
+
+    def _risk_confidence(self, technical: Dict) -> float:
+        volatility_pct = technical.get('volatility_30d',0.5)*100
+        if volatility_pct>100: return 30.0
+        if volatility_pct>70: return 50.0
+        if volatility_pct<40: return 80.0
+        return 65.0
+
+    def _confidence_level(self, score: float) -> str:
+        if score>=80: return "Very High"
+        if score>=65: return "High"
+        if score>=50: return "Medium"
+        if score>=35: return "Low"
+        return "Very Low"
+
 class DecisionEngine:
     """Make investment decisions based on analysis results, with optional GPT reasoning"""
     
