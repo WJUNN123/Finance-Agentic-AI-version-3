@@ -1,5 +1,13 @@
 """
-LSTM-based price prediction engine
+Hybrid prediction engine: LSTM + XGBoost
+- Preserves original LSTM-based predictor implementation.
+- Adds XGBoost-based predictor.
+- Adds HybridPredictor that fuses LSTM + XGBoost forecasts (weighted average).
+- Exported API:
+    - PricePredictor (LSTM) : unchanged public methods
+    - XGBoostPredictor : same interface (train_or_load, predict_future)
+    - HybridPredictor : train_or_load, predict_future
+    - get_hybrid_predictor(symbol, lstm_weight=0.5, look_back=None, features=None)
 """
 import os
 import sys
@@ -16,9 +24,13 @@ from contextlib import contextmanager
 
 import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential, Model
+from sklearn.model_selection import train_test_split
+
+from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, LSTM, Dropout, Dense
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+
+import xgboost as xgb
 
 from config import Config
 
@@ -28,6 +40,7 @@ tf.get_logger().setLevel('ERROR')
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger(__name__)
+
 
 @contextmanager
 def suppress_stdout():
@@ -39,9 +52,10 @@ def suppress_stdout():
     finally:
         sys.stdout = old_stdout
 
+
 class PricePredictor:
-    """LSTM model for price prediction with model persistence"""
-    
+    """Original LSTM model for price prediction with model persistence"""
+
     def __init__(self, symbol: str, look_back: int = None, features: List[str] = None):
         self.symbol = symbol
         self.look_back = look_back or Config.LSTM_LOOKBACK_DAYS
@@ -57,19 +71,15 @@ class PricePredictor:
 
     def _prepare_data(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """Prepare multivariate data for the LSTM model"""
-        # Check if required features exist in the DataFrame
         missing_features = [f for f in self.features if f not in df.columns]
         if missing_features:
             logger.warning(f"Missing features {missing_features} in DataFrame")
-            # Use available features only
             available_features = [f for f in self.features if f in df.columns]
             if not available_features:
                 raise ValueError("No valid features found in DataFrame")
             self.features = available_features
 
         data = df.filter(self.features)
-
-        # Handle any NaN or infinite values
         data = data.ffill().bfill()
         data = data.replace([np.inf, -np.inf], np.nan).ffill()
 
@@ -101,31 +111,27 @@ class PricePredictor:
         logger.info("LSTM model built successfully")
 
     def train_or_load(self, df: pd.DataFrame, force_retrain: bool = False):
-        """Main method to either load a pre-trained model or train a new one"""
-        if (self.model_path.exists() and self.scaler_path.exists() 
-            and not force_retrain):
+        """Either load a pre-trained model or train a new one"""
+        if (self.model_path.exists() and self.scaler_path.exists() and not force_retrain):
             try:
-                logger.info(f"Loading pre-trained model for {self.symbol.upper()}")
+                logger.info(f"Loading pre-trained LSTM model for {self.symbol.upper()}")
                 self.model = tf.keras.models.load_model(self.model_path)
                 self.scaler = joblib.load(self.scaler_path)
-                logger.info("Model loaded successfully")
+                logger.info("LSTM model loaded successfully")
                 return
             except Exception as e:
-                logger.warning(f"Could not load model, will retrain. Error: {e}")
+                logger.warning(f"Could not load LSTM model, will retrain. Error: {e}")
 
         logger.info(f"Training new LSTM model for {self.symbol.upper()}")
 
-        # Check if we have enough data
         min_required = self.look_back + 20
         if len(df) < min_required:
             logger.warning(
-                f"Not enough historical data to train optimally. "
-                f"Required {min_required}, got {len(df)}"
+                f"Not enough historical data to train optimally. Required {min_required}, got {len(df)}"
             )
             if len(df) < self.look_back + 5:
                 raise ValueError(
-                    f"Insufficient data for training. "
-                    f"Need at least {self.look_back + 5} rows, got {len(df)}"
+                    f"Insufficient data for training. Need at least {self.look_back + 5} rows, got {len(df)}"
                 )
 
         _, scaled_data = self._prepare_data(df)
@@ -134,152 +140,203 @@ class PricePredictor:
         if X_train.shape[0] == 0:
             raise RuntimeError("Could not create a training set from the provided data")
 
-        logger.info(f"Preparing training data: {X_train.shape[0]} samples")
-
+        logger.info(f"Preparing LSTM training data: {X_train.shape[0]} samples")
         self._build_model((X_train.shape[1], X_train.shape[2]))
 
-        # Callbacks for training
-        early_stopping = EarlyStopping(
-            monitor='val_loss', patience=10, restore_best_weights=True
-        )
-        model_checkpoint = ModelCheckpoint(
-            self.model_path, save_best_only=True, monitor='val_loss'
-        )
+        early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+        model_checkpoint = ModelCheckpoint(self.model_path, save_best_only=True, monitor='val_loss')
 
-        # Train the model with suppressed output
-        logger.info("Training model...")
-        
+        logger.info("Training LSTM model...")
         with suppress_stdout():
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 self.model.fit(
                     X_train, y_train,
-                    batch_size=min(32, len(X_train) // 4),
+                    batch_size=min(32, max(1, len(X_train)//4)),
                     epochs=50,
                     validation_split=0.1,
                     callbacks=[early_stopping, model_checkpoint],
                     verbose=0
                 )
 
-        logger.info(f"Model training completed for {self.symbol.upper()}")
-
-        # Save the scaler
         joblib.dump(self.scaler, self.scaler_path)
-
-        # Verify model and scaler are properly loaded
         if self.model is None or self.scaler is None:
-            raise RuntimeError(
-                f"Model for {self.symbol} was not trained or loaded successfully"
-            )
+            raise RuntimeError(f"LSTM model for {self.symbol} was not trained or loaded successfully")
 
     def predict_future(self, df: pd.DataFrame, days: int = None) -> Optional[List[Dict]]:
-        """Predict future prices using the trained multivariate model"""
+        """Predict future prices using the trained multivariate LSTM model"""
         days = days or Config.FORECAST_DAYS
-        
         if self.model is None:
-            logger.error("Model is not loaded. Please call train_or_load() first")
+            logger.error("LSTM model is not loaded. Please call train_or_load() first")
             return None
 
         try:
-            # Use the same features as during training
             data = df.filter(self.features)
-
-            # Handle missing values
             data = data.ffill().bfill()
             data = data.replace([np.inf, -np.inf], np.nan).ffill()
-
             if len(data) < self.look_back:
-                logger.error(
-                    f"Not enough data for prediction. "
-                    f"Need {self.look_back}, got {len(data)}"
-                )
+                logger.error(f"Not enough data for LSTM prediction. Need {self.look_back}, got {len(data)}")
                 return None
 
             scaled_data = self.scaler.transform(data.values)
             last_sequence = scaled_data[-self.look_back:]
             predictions = []
 
-            logger.info(f"Generating {days}-day forecast...")
-
+            logger.info(f"LSTM generating {days}-day forecast...")
             for day in range(days):
-                # Reshape for prediction
-                current_sequence_reshaped = np.reshape(
-                    last_sequence, (1, self.look_back, len(self.features))
-                )
-
-                # Make prediction with suppressed output
+                current_sequence_reshaped = np.reshape(last_sequence, (1, self.look_back, len(self.features)))
                 with suppress_stdout():
-                    predicted_scaled_price = self.model.predict(
-                        current_sequence_reshaped, verbose=0
-                    )[0][0]
-                    
+                    predicted_scaled_price = self.model.predict(current_sequence_reshaped, verbose=0)[0][0]
                 predictions.append(predicted_scaled_price)
 
-                # Update sequence for next prediction
                 if len(self.features) > 1:
                     next_step_features = last_sequence[-1, 1:].copy()
                     new_row = np.insert(next_step_features, 0, predicted_scaled_price)
                 else:
                     new_row = np.array([predicted_scaled_price])
 
-                # Update the sequence
-                last_sequence = np.vstack([last_sequence[1:], new_row.reshape(1, -1)])
+                last_sequence = np.vstack([last_sequence[1:], new_row.reshape(1,-1)])
 
-            # Convert back to original scale
             dummy_array = np.zeros((len(predictions), len(self.features)))
-            dummy_array[:, 0] = predictions
-            predicted_prices_unscaled = self.scaler.inverse_transform(dummy_array)[:, 0]
+            dummy_array[:,0] = predictions
+            predicted_prices_unscaled = self.scaler.inverse_transform(dummy_array)[:,0]
 
-            # Format forecast
             forecast = []
             for i, price in enumerate(predicted_prices_unscaled):
                 forecast.append({
-                    'date': (datetime.now() + timedelta(days=i + 1)).strftime('%Y-%m-%d'),
-                    'predicted_price': round(max(price, 0.01), 4)
+                    'date': (datetime.now() + timedelta(days=i+1)).strftime('%Y-%m-%d'),
+                    'predicted_price': round(max(price, 0.01),4)
                 })
-
             return forecast
-
         except Exception as e:
-            logger.error(f"Prediction failed: {e}")
+            logger.error(f"LSTM prediction failed: {e}")
             return None
 
+
+class XGBoostPredictor:
+    """XGBoost model for short-term price prediction"""
+
+    def __init__(self, symbol: str, look_back: int = None, features: List[str] = None):
+        self.symbol = symbol
+        self.look_back = look_back or Config.LSTM_LOOKBACK_DAYS
+        self.features = features if features is not None else ['price', 'volume']
+        self.model = None
+        self.scaler = MinMaxScaler(feature_range=(0,1))
+
+        self.model_dir = Path("trained_models")
+        self.model_dir.mkdir(exist_ok=True)
+        self.model_path = self.model_dir / f"{self.symbol}_xgb_model.joblib"
+        self.scaler_path = self.model_dir / f"{self.symbol}_xgb_scaler.joblib"
+
+    def _prepare_supervised(self, df: pd.DataFrame) -> Tuple[np.ndarray,np.ndarray]:
+        data = df.filter(self.features).ffill().bfill()
+        scaled = self.scaler.fit_transform(data.values)
+        X, y = [], []
+        for i in range(self.look_back, len(scaled)):
+            X.append(scaled[i-self.look_back:i].flatten())
+            y.append(scaled[i,0])
+        return np.array(X), np.array(y)
+
+    def train_or_load(self, df: pd.DataFrame, force_retrain: bool=False):
+        if self.model_path.exists() and self.scaler_path.exists() and not force_retrain:
+            try:
+                self.model = joblib.load(self.model_path)
+                self.scaler = joblib.load(self.scaler_path)
+                return
+            except:
+                pass
+
+        X, y = self._prepare_supervised(df)
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=False)
+        model = xgb.XGBRegressor(n_estimators=200, max_depth=6, learning_rate=0.05,
+                                 objective='reg:squarederror', verbosity=0, n_jobs=1)
+        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], early_stopping_rounds=10, verbose=False)
+        self.model = model
+        joblib.dump(self.model, self.model_path)
+        joblib.dump(self.scaler, self.scaler_path)
+
+    def predict_future(self, df: pd.DataFrame, days:int=None) -> Optional[List[float]]:
+        days = days or Config.FORECAST_DAYS
+        if self.model is None:
+            return None
+        data = df.filter(self.features).ffill().bfill()
+        scaled = self.scaler.transform(data.values)
+        last_window = scaled[-self.look_back:]
+        predictions_scaled = []
+        for _ in range(days):
+            X_input = last_window.flatten().reshape(1,-1)
+            pred_scaled = float(self.model.predict(X_input)[0])
+            predictions_scaled.append(pred_scaled)
+            if len(self.features)>1:
+                next_row = np.insert(last_window[-1,1:],0,pred_scaled)
+            else:
+                next_row = np.array([pred_scaled])
+            last_window = np.vstack([last_window[1:], next_row.reshape(1,-1)])
+
+        dummy = np.zeros((len(predictions_scaled), len(self.features)))
+        dummy[:,0] = predictions_scaled
+        return self.scaler.inverse_transform(dummy)[:,0].tolist()
+
+
+class HybridPredictor:
+    """Hybrid predictor combining LSTM + XGBoost"""
+
+    def __init__(self, symbol: str, lstm_weight: float = 0.5, look_back: int = None, features: List[str] = None):
+        if not 0<=lstm_weight<=1:
+            raise ValueError("lstm_weight must be between 0 and 1")
+        self.symbol = symbol
+        self.lstm_weight = lstm_weight
+        self.xgb_weight = 1.0 - lstm_weight
+        self.lstm = PricePredictor(symbol, look_back, features)
+        self.xgb = XGBoostPredictor(symbol, look_back, features)
+
+    def train_or_load(self, df: pd.DataFrame, force_retrain: bool=False):
+        logger.info(f"Hybrid: train_or_load for {self.symbol.upper()}")
+        self.lstm.train_or_load(df, force_retrain)
+        self.xgb.train_or_load(df, force_retrain)
+
+    def predict_future(self, df: pd.DataFrame, days: int=None) -> Optional[List[Dict]]:
+        days = days or Config.FORECAST_DAYS
+        lstm_forecast = self.lstm.predict_future(df, days)
+        xgb_forecast = self.xgb.predict_future(df, days)
+        fused = [(self.lstm_weight*l + self.xgb_weight*x) for l,x in zip(lstm_forecast, xgb_forecast)]
+        forecast = []
+        for i, price in enumerate(fused):
+            forecast.append({
+                'date': (datetime.now()+timedelta(days=i+1)).strftime('%Y-%m-%d'),
+                'predicted_price': round(max(price,0.01),4)
+            })
+        return forecast
+
+
+def get_hybrid_predictor(symbol: str, lstm_weight: float = 0.5, look_back: int=None, features:List[str]=None) -> HybridPredictor:
+    """Factory to obtain a hybrid predictor"""
+    return HybridPredictor(symbol, lstm_weight, look_back, features)
+
+
 class PredictionAdjuster:
-    """Adjusts raw LSTM forecast based on sentiment and technical signals"""
-    
+    """Adjusts raw forecast based on sentiment and technical signals (kept unchanged)"""
+
     def adjust(self, raw_forecast: List[Dict], decision_data: Dict,
                confidence_data: Dict, current_price: float) -> List[Dict]:
-        """Adjusts the forecast based on overall signal strength and confidence"""
         if not raw_forecast:
             return []
 
-        signal_strength = decision_data.get('signal_strength', 0) / 100.0
-        confidence = confidence_data.get('overall_confidence', 50) / 100.0
-
-        # Create a daily adjustment factor
-        adjustment_factor = signal_strength * confidence * 0.5
+        signal_strength = decision_data.get('signal_strength', 0)/100.0
+        confidence = confidence_data.get('overall_confidence', 50)/100.0
+        adjustment_factor = signal_strength*confidence*0.5
 
         adjusted_forecast = []
         last_price = current_price
-
-        for i, forecast_point in enumerate(raw_forecast):
+        for forecast_point in raw_forecast:
             raw_predicted_price = forecast_point['predicted_price']
-
-            # Calculate the model's expected change
             model_change = raw_predicted_price - last_price
-
-            # Apply the adjustment to the change
-            adjusted_change = model_change * (1 + adjustment_factor)
-
-            # Calculate the new adjusted price
+            adjusted_change = model_change*(1+adjustment_factor)
             adjusted_price = last_price + adjusted_change
-
             adjusted_forecast.append({
                 'date': forecast_point['date'],
-                'predicted_price': round(max(adjusted_price, 0.01), 2)
+                'predicted_price': round(max(adjusted_price,0.01),2)
             })
-
-            # The next prediction is based on the newly adjusted price
             last_price = adjusted_price
 
         return adjusted_forecast
