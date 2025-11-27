@@ -8,7 +8,7 @@ from typing import Dict, Optional
 from data_fetcher import DataFetcher
 from sentiment_analyzer import SentimentAnalyzer, NewsAnalyzer
 from technical_analyzer import TechnicalAnalyzer
-from analysis_engine import DecisionEngine
+from analysis_engine import ConfidenceCalculator, DecisionEngine
 from prediction_engine import PricePredictor, PredictionAdjuster
 from config import Config
 
