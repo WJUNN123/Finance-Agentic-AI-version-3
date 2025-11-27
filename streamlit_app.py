@@ -53,7 +53,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=300)
+@st.cache_resource(ttl=300)
 def load_analyzer(csv_path=None):
     return CryptoAnalyzer(csv_file_path=csv_path)
 
