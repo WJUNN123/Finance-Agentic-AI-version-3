@@ -3,19 +3,21 @@ import os
 import logging
 from typing import Dict, Any, List, Optional
 
-# If you're using the OpenAI-compatible client for Gemini
+# OpenAI-compatible Gemini client
 from openai import OpenAI
 from openai.types import ChatCompletionRequestMessage
 
 logger = logging.getLogger(__name__)
 
 class GPTInsightGenerator:
-    """Generate investment insights with Gemini‑Flash given analysis data."""
+    """Generate investment insights using Gemini Flash 2.0."""
 
     def __init__(self, model: str = "gemini-2.0-flash"):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY not set in environment.")
+        
+        # Initialize OpenAI-compatible Gemini client
         self.client = OpenAI(
             api_key=api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -30,24 +32,24 @@ class GPTInsightGenerator:
         market_data: Dict[str, Any],
         forecast: Optional[List[Dict[str, Any]]] = None
     ) -> str:
-        """Generate natural-language insight + recommendation from structured input."""
-        # Build prompt
+        """
+        Generate a natural-language insight and recommendation
+        from structured crypto analysis input.
+        """
         prompt = self._build_prompt(technical, sentiment, confidence, market_data, forecast)
 
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=prompt,
-                # you can optionally set temperature, max_tokens, etc.
                 temperature=0.3,
                 max_tokens=256
             )
-            # Extract assistant reply
             message = response.choices[0].message
-            content = message.content if hasattr(message, 'content') else None
+            content = getattr(message, "content", None)
             return content or "<No response from GPT>"
         except Exception as e:
-            logger.error(f"Error calling GPTInsightGenerator: {e}", exc_info=True)
+            logger.error(f"Error in GPTInsightGenerator.generate: {e}", exc_info=True)
             return f"GPT generation error: {e}"
 
     def _build_prompt(
@@ -58,13 +60,15 @@ class GPTInsightGenerator:
         market_data: Dict[str, Any],
         forecast: Optional[List[Dict[str, Any]]]
     ) -> List[ChatCompletionRequestMessage]:
-        """Build the conversation prompt for Gemini."""
+        """
+        Build system + user messages for Gemini chat completion.
+        """
         system_msg = {
             "role": "system",
             "content": (
                 "You are a friendly, professional cryptocurrency investment analyst. "
-                "Provide clear, succinct insights and a recommendation (Buy / Hold / Sell / Wait) "
-                "based on the data provided. Do not mention internal code or technical implementation details."
+                "Provide clear, concise insights and a recommendation (Buy / Hold / Sell / Wait) "
+                "based on the data provided. Avoid mentioning internal code or implementation details."
             )
         }
 
@@ -79,7 +83,7 @@ class GPTInsightGenerator:
             user_content += f"- Forecast (next days): {forecast}\n"
 
         user_content += (
-            "\nProvide your conclusion as a short paragraph: state what you think the market condition is, "
+            "\nProvide a short paragraph: state your view of the market condition, "
             "your recommendation, and a brief reasoning in simple language."
         )
 
