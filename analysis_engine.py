@@ -1,7 +1,8 @@
 import logging
 from typing import Dict, Optional
+import numpy as np
 from config import Config, Action, RiskLevel
-from gpt_engine import GPTInsightGenerator 
+from gpt_engine import GPTInsightGenerator
 
 logger = logging.getLogger(__name__)
 
