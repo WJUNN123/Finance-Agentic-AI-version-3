@@ -12,46 +12,44 @@ logger = logging.getLogger(__name__)
 
 class SentimentAnalyzer:
     def __init__(self):
-        try:
-            # REPLACED FINBERT → TWITTER-ROBERTA
-            model_name = "cardiffnlp/twitter-roberta-base-sentiment-latest"
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
-            self.sentiment = pipeline(
-                "sentiment-analysis", 
-                model=self.model, 
-                tokenizer=self.tokenizer
-            )
-        except Exception as e:
-            logger.warning(f"Failed to load Twitter-RoBERTa model: {e}")
-            self.sentiment = None
-            
+        # Don't load the model yet
+        self.sentiment = None
+        self.model_name = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+        
+        # Keyword-based fallback
         self.crypto_keywords = {
-            'positive': [
-                'bullish', 'moon', 'surge', 'rally', 'breakout', 'adoption', 
-                'partnership', 'growth', 'pump', 'accumulate', 'buy', 'long'
-            ],
-            'negative': [
-                'crash', 'dump', 'bearish', 'decline', 'regulation', 'ban', 
-                'hack', 'fall', 'drop', 'sell', 'short', 'liquidation'
-            ]
+            'positive': ['bullish', 'moon', 'surge', 'rally', 'breakout', 'adoption', 'partnership', 'growth', 'pump', 'accumulate', 'buy', 'long'],
+            'negative': ['crash', 'dump', 'bearish', 'decline', 'regulation', 'ban', 'hack', 'fall', 'drop', 'sell', 'short', 'liquidation']
         }
 
-    def analyze_headlines(self, headlines: List[str]) -> Dict:
-        """Enhanced sentiment analysis with keyword weighting"""
-        if not headlines:
-            return {
-                'sentiment_score': 0, 
-                'confidence': 0, 
-                'analysis': [],
-                'headline_count': 0
-            }
+    def _lazy_load_model(self):
+        """Load RoBERTa model only when needed"""
+        if self.sentiment is None:
+            from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+            import logging
+            logger = logging.getLogger(__name__)
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+                self.sentiment = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
+                logger.info("Twitter-RoBERTa model loaded successfully")
+            except Exception as e:
+                logger.warning(f"Failed to load Twitter-RoBERTa model: {e}")
+                self.sentiment = None
 
+    def analyze_headlines(self, headlines: List[str]) -> Dict:
+        # Lazy load the model here
+        self._lazy_load_model()
+
+        if not headlines:
+            return {'sentiment_score': 0, 'confidence': 0, 'analysis': [], 'headline_count': 0}
+
+        # Use the model if available, fallback to keyword scoring
+        sentiment_results = []
         try:
             if self.sentiment:
                 sentiment_results = self.sentiment(headlines[:10])
             else:
-                sentiment_results = []
                 for headline in headlines[:10]:
                     score = self._calculate_keyword_sentiment(headline)
                     if score > 0.1:
@@ -60,32 +58,21 @@ class SentimentAnalyzer:
                         sentiment_results.append({'label': 'negative', 'score': abs(score)})
                     else:
                         sentiment_results.append({'label': 'neutral', 'score': 0.5})
-                        
         except Exception as e:
-            logger.error(f"Sentiment analysis failed: {e}")
             sentiment_results = []
-
+        
+        # Rest of your scoring logic...
         total_score = 0
         confidence_scores = []
         detailed_analysis = []
 
         for i, headline in enumerate(headlines[:10]):
-            if i < len(sentiment_results):
-                base_sentiment = sentiment_results[i]
-            else:
-                base_sentiment = {'label': 'neutral', 'score': 0.5}
-                
+            base_sentiment = sentiment_results[i] if i < len(sentiment_results) else {'label': 'neutral', 'score': 0.5}
             keyword_boost = self._calculate_keyword_sentiment(headline)
 
             label = base_sentiment['label'].lower()
-            if label == 'positive':
-                score = base_sentiment['score']
-            elif label == 'negative':
-                score = -base_sentiment['score']
-            else:
-                score = 0
-
-            final_score = np.clip(score + keyword_boost * 0.3, -1, 1)
+            score = base_sentiment['score'] if label == 'positive' else -base_sentiment['score'] if label == 'negative' else 0
+            final_score = max(min(score + keyword_boost * 0.3, 1), -1)
             total_score += final_score
             confidence_scores.append(base_sentiment['score'])
 
@@ -107,16 +94,11 @@ class SentimentAnalyzer:
         }
 
     def _calculate_keyword_sentiment(self, text: str) -> float:
-        """Calculate sentiment boost based on crypto-specific keywords"""
         text_lower = text.lower()
-        pos_count = sum(1 for word in self.crypto_keywords['positive'] 
-                       if word in text_lower)
-        neg_count = sum(1 for word in self.crypto_keywords['negative'] 
-                       if word in text_lower)
-
+        pos_count = sum(1 for word in self.crypto_keywords['positive'] if word in text_lower)
+        neg_count = sum(1 for word in self.crypto_keywords['negative'] if word in text_lower)
         if pos_count + neg_count == 0:
             return 0
-
         return (pos_count - neg_count) / (pos_count + neg_count)
 
 class NewsAnalyzer:
