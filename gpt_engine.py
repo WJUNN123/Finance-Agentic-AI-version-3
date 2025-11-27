@@ -5,19 +5,16 @@ from typing import Dict, Any, List, Optional
 
 # OpenAI-compatible Gemini client
 from openai import OpenAI
-from openai.types import ChatCompletionRequestMessage
 
 logger = logging.getLogger(__name__)
 
 class GPTInsightGenerator:
-    """Generate investment insights using Gemini Flash 2.0."""
+    """Generate investment insights with Gemini‑Flash given analysis data."""
 
     def __init__(self, model: str = "gemini-2.0-flash"):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY not set in environment.")
-        
-        # Initialize OpenAI-compatible Gemini client
         self.client = OpenAI(
             api_key=api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -32,10 +29,7 @@ class GPTInsightGenerator:
         market_data: Dict[str, Any],
         forecast: Optional[List[Dict[str, Any]]] = None
     ) -> str:
-        """
-        Generate a natural-language insight and recommendation
-        from structured crypto analysis input.
-        """
+        """Generate natural-language insight + recommendation from structured input."""
         prompt = self._build_prompt(technical, sentiment, confidence, market_data, forecast)
 
         try:
@@ -45,11 +39,12 @@ class GPTInsightGenerator:
                 temperature=0.3,
                 max_tokens=256
             )
+            # Extract assistant reply
             message = response.choices[0].message
             content = getattr(message, "content", None)
             return content or "<No response from GPT>"
         except Exception as e:
-            logger.error(f"Error in GPTInsightGenerator.generate: {e}", exc_info=True)
+            logger.error(f"Error calling GPTInsightGenerator: {e}", exc_info=True)
             return f"GPT generation error: {e}"
 
     def _build_prompt(
@@ -59,16 +54,14 @@ class GPTInsightGenerator:
         confidence: Dict[str, Any],
         market_data: Dict[str, Any],
         forecast: Optional[List[Dict[str, Any]]]
-    ) -> List[ChatCompletionRequestMessage]:
-        """
-        Build system + user messages for Gemini chat completion.
-        """
+    ) -> List[Dict[str, str]]:
+        """Build the conversation prompt for Gemini."""
         system_msg = {
             "role": "system",
             "content": (
                 "You are a friendly, professional cryptocurrency investment analyst. "
-                "Provide clear, concise insights and a recommendation (Buy / Hold / Sell / Wait) "
-                "based on the data provided. Avoid mentioning internal code or implementation details."
+                "Provide clear, succinct insights and a recommendation (Buy / Hold / Sell / Wait) "
+                "based on the data provided. Do not mention internal code or technical implementation details."
             )
         }
 
@@ -83,7 +76,7 @@ class GPTInsightGenerator:
             user_content += f"- Forecast (next days): {forecast}\n"
 
         user_content += (
-            "\nProvide a short paragraph: state your view of the market condition, "
+            "\nProvide your conclusion as a short paragraph: state what you think the market condition is, "
             "your recommendation, and a brief reasoning in simple language."
         )
 
