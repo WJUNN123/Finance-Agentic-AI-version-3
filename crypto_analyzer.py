@@ -11,7 +11,6 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-
 class ResultFormatter:
     def format_analysis(self, result: Dict) -> Dict:
         try:
@@ -19,7 +18,6 @@ class ResultFormatter:
         except Exception as e:
             logger.error(f"Failed to format analysis: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
-
 
 class CryptoAnalyzer:
     def __init__(self):
@@ -41,21 +39,12 @@ class CryptoAnalyzer:
 
             # Fetch market data
             market_data = self.data_fetcher.fetch_crypto_data(symbol)
-            if not market_data:
-                return {
-                    "status": "error",
-                    "symbol": symbol,
-                    "message": f"Failed to fetch live data for {symbol}"
-                }
+            market_info = market_data.get("market_data", market_data)  # fallback if missing
 
             # Fetch historical data
             historical_df = self.data_fetcher.fetch_historical_data(symbol, days=30)
             if historical_df.empty:
-                return {
-                    "status": "error",
-                    "symbol": symbol,
-                    "message": f"Failed to fetch historical data for {symbol}"
-                }
+                return {"status": "error", "symbol": symbol, "message": f"Failed to fetch historical data for {symbol}"}
 
             # Technical and sentiment analysis
             technical_result = self.technical_analyzer.analyze(historical_df)
@@ -66,7 +55,7 @@ class CryptoAnalyzer:
             if forecast is None:
                 self.prediction_engine.train_or_load(historical_df)
                 forecast = self.prediction_engine.predict(historical_df)
-            forecast = self.adjuster.adjust(forecast, market_data)
+            forecast = self.adjuster.adjust(forecast, market_info)
 
             # Decision making
             confidence_scores = {"overall_confidence": technical_result.get("confidence", 50)}
@@ -74,17 +63,15 @@ class CryptoAnalyzer:
                 technical=technical_result,
                 sentiment=sentiment_result,
                 confidence=confidence_scores,
-                market_data=market_data
+                market_data=market_info
             )
 
-            # Extract market metrics safely
-            market_info = market_data.get("market_data", {})
             result = {
                 "symbol": symbol,
                 "current_price": market_info.get("current_price", 0.0),
                 "market_cap": market_info.get("market_cap", 0),
                 "price_change_24h": market_info.get("price_change_24h", 0.0),
-                "market_cap_rank": market_data.get("market_cap_rank", 0),
+                "market_cap_rank": market_info.get("market_cap_rank", 0),
                 "forecast": forecast or [],
                 "technical": technical_result,
                 "sentiment": sentiment_result,
@@ -102,7 +89,6 @@ class CryptoAnalyzer:
             return result
 
         except Exception as e:
-            # Use a fallback symbol in logging
             safe_symbol = symbol or "UNKNOWN"
             logger.error(f"Analysis failed for {safe_symbol}: {e}", exc_info=True)
             return {"status": "error", "symbol": safe_symbol, "message": str(e)}
