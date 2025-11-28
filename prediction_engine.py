@@ -4,9 +4,9 @@ Hybrid prediction engine: LSTM + XGBoost
 - Adds XGBoost-based predictor.
 - Adds HybridPredictor that fuses LSTM + XGBoost forecasts (weighted average).
 - Exported API:
-    - PricePredictor (LSTM) : unchanged public methods
-    - XGBoostPredictor : same interface (train_or_load, predict_future)
-    - HybridPredictor : train_or_load, predict_future
+    - PricePredictor (LSTM) : unchanged public methods (train_or_load, predict_future, predict)
+    - XGBoostPredictor : same interface (train_or_load, predict_future, predict)
+    - HybridPredictor : train_or_load, predict_future, predict
     - get_hybrid_predictor(symbol, lstm_weight=0.5, look_back=None, features=None)
 """
 import os
@@ -212,6 +212,10 @@ class PricePredictor:
             logger.error(f"LSTM prediction failed: {e}")
             return None
 
+    # Backwards compatible alias
+    def predict(self, df: pd.DataFrame, days:int=None):
+        return self.predict_future(df, days)
+
 
 class XGBoostPredictor:
     """XGBoost model for short-term price prediction"""
@@ -243,10 +247,12 @@ class XGBoostPredictor:
                 self.model = joblib.load(self.model_path)
                 self.scaler = joblib.load(self.scaler_path)
                 return
-            except:
-                pass
+            except Exception:
+                logger.info("Could not load existing XGBoost model/scaler; will retrain.")
 
         X, y = self._prepare_supervised(df)
+        if len(X) == 0:
+            raise RuntimeError("Not enough data to train XGBoost model")
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=False)
         model = xgb.XGBRegressor(n_estimators=200, max_depth=6, learning_rate=0.05,
                                  objective='reg:squarederror', verbosity=0, n_jobs=1)
@@ -255,11 +261,21 @@ class XGBoostPredictor:
         joblib.dump(self.model, self.model_path)
         joblib.dump(self.scaler, self.scaler_path)
 
-    def predict_future(self, df: pd.DataFrame, days:int=None) -> Optional[List[float]]:
+    def predict_future(self, df: pd.DataFrame, days:int=None) -> Optional[List[Dict]]:
+        """
+        Returns a list of dicts to match LSTM output:
+        [{ 'date': 'YYYY-MM-DD', 'predicted_price': float }, ...]
+        """
         days = days or Config.FORECAST_DAYS
         if self.model is None:
+            logger.error("XGBoost model is not loaded. Please call train_or_load() first")
             return None
+
         data = df.filter(self.features).ffill().bfill()
+        if len(data) < self.look_back:
+            logger.error(f"Not enough data for XGBoost prediction. Need {self.look_back}, got {len(data)}")
+            return None
+
         scaled = self.scaler.transform(data.values)
         last_window = scaled[-self.look_back:]
         predictions_scaled = []
@@ -275,7 +291,19 @@ class XGBoostPredictor:
 
         dummy = np.zeros((len(predictions_scaled), len(self.features)))
         dummy[:,0] = predictions_scaled
-        return self.scaler.inverse_transform(dummy)[:,0].tolist()
+        predicted_prices = self.scaler.inverse_transform(dummy)[:,0].tolist()
+
+        forecast = []
+        for i, price in enumerate(predicted_prices):
+            forecast.append({
+                'date': (datetime.now()+timedelta(days=i+1)).strftime('%Y-%m-%d'),
+                'predicted_price': round(max(price,0.01),4)
+            })
+        return forecast
+
+    # Backwards compatible alias
+    def predict(self, df: pd.DataFrame, days:int=None):
+        return self.predict_future(df, days)
 
 
 class HybridPredictor:
@@ -292,14 +320,27 @@ class HybridPredictor:
 
     def train_or_load(self, df: pd.DataFrame, force_retrain: bool=False):
         logger.info(f"Hybrid: train_or_load for {self.symbol.upper()}")
+        # Train/load both models (if not available)
         self.lstm.train_or_load(df, force_retrain)
         self.xgb.train_or_load(df, force_retrain)
 
     def predict_future(self, df: pd.DataFrame, days: int=None) -> Optional[List[Dict]]:
         days = days or Config.FORECAST_DAYS
+
         lstm_forecast = self.lstm.predict_future(df, days)
         xgb_forecast = self.xgb.predict_future(df, days)
-        fused = [(self.lstm_weight*l + self.xgb_weight*x) for l,x in zip(lstm_forecast, xgb_forecast)]
+
+        if lstm_forecast is None or xgb_forecast is None:
+            logger.error("One of the component predictors returned None")
+            return None
+
+        # Extract numeric prices from both forecasts (they are lists of dicts)
+        lstm_prices = [entry['predicted_price'] if isinstance(entry, dict) and 'predicted_price' in entry else float(entry) for entry in lstm_forecast]
+        xgb_prices = [entry['predicted_price'] if isinstance(entry, dict) and 'predicted_price' in entry else float(entry) for entry in xgb_forecast]
+
+        # ensure lengths match (zip will truncate to shortest)
+        fused = [(self.lstm_weight * l + self.xgb_weight * x) for l, x in zip(lstm_prices, xgb_prices)]
+
         forecast = []
         for i, price in enumerate(fused):
             forecast.append({
@@ -307,6 +348,10 @@ class HybridPredictor:
                 'predicted_price': round(max(price,0.01),4)
             })
         return forecast
+
+    # Backwards compatible alias
+    def predict(self, df: pd.DataFrame, days:int=None):
+        return self.predict_future(df, days)
 
 
 def get_hybrid_predictor(symbol: str, lstm_weight: float = 0.5, look_back: int=None, features:List[str]=None) -> HybridPredictor:
@@ -317,25 +362,51 @@ def get_hybrid_predictor(symbol: str, lstm_weight: float = 0.5, look_back: int=N
 class PredictionAdjuster:
     """Adjusts raw forecast based on sentiment and technical signals (kept unchanged)"""
 
-    def adjust(self, raw_forecast: List[Dict], decision_data: Dict,
-               confidence_data: Dict, current_price: float) -> List[Dict]:
+    def adjust(self, raw_forecast: List[Dict], decision_data: Optional[Dict]=None,
+               confidence_data: Optional[Dict]=None, current_price: Optional[float]=None) -> List[Dict]:
+        """
+        Backwards-compatible adjust():
+        - Old callers may pass (raw_forecast, market_data)
+        - New callers may pass (raw_forecast, decision_data, confidence_data, current_price)
+        This function will detect and adapt.
+        """
+        # Backwards compatibility: if only raw_forecast and market_data passed
+        if confidence_data is None and current_price is None and isinstance(decision_data, dict):
+            market_data = decision_data
+            # best-effort extraction of current price
+            try:
+                current_price = market_data.get('market_data', {}).get('current_price') or market_data.get('current_price')
+            except Exception:
+                current_price = None
+            # Provide safe defaults for missing pieces
+            decision_data = {}
+            confidence_data = {"overall_confidence": 50}
+
+        # If still missing current_price, try to set to the first forecast price
+        if current_price is None:
+            try:
+                current_price = raw_forecast[0]['predicted_price'] if raw_forecast and isinstance(raw_forecast[0], dict) else 0.0
+            except Exception:
+                current_price = 0.0
+
         if not raw_forecast:
             return []
 
-        signal_strength = decision_data.get('signal_strength', 0)/100.0
-        confidence = confidence_data.get('overall_confidence', 50)/100.0
-        adjustment_factor = signal_strength*confidence*0.5
+        signal_strength = (decision_data.get('signal_strength', 0) if isinstance(decision_data, dict) else 0) / 100.0
+        confidence = (confidence_data.get('overall_confidence', 50) if isinstance(confidence_data, dict) else 50) / 100.0
+        adjustment_factor = signal_strength * confidence * 0.5
 
         adjusted_forecast = []
         last_price = current_price
         for forecast_point in raw_forecast:
-            raw_predicted_price = forecast_point['predicted_price']
+            raw_predicted_price = forecast_point.get('predicted_price') if isinstance(forecast_point, dict) else float(forecast_point)
             model_change = raw_predicted_price - last_price
-            adjusted_change = model_change*(1+adjustment_factor)
+            adjusted_change = model_change * (1 + adjustment_factor)
             adjusted_price = last_price + adjusted_change
             adjusted_forecast.append({
-                'date': forecast_point['date'],
-                'predicted_price': round(max(adjusted_price,0.01),2)
+                'date': forecast_point.get('date') if isinstance(forecast_point, dict) and 'date' in forecast_point
+                        else (datetime.now()+timedelta(days=len(adjusted_forecast)+1)).strftime('%Y-%m-%d'),
+                'predicted_price': round(max(adjusted_price, 0.01), 2)
             })
             last_price = adjusted_price
 
