@@ -85,10 +85,10 @@ class CryptoAnalyzer:
             # Final formatted result
             result = {
                 "symbol": symbol.upper(),
-                "current_price": market_data["market_data"].get("current_price"),
-                "market_cap": market_data["market_data"].get("market_cap"),
-                "price_change_24h": market_data["market_data"].get("price_change_24h", 0),
-                "market_cap_rank": market_data.get("market_cap_rank"),
+                "current_price": current_price,
+                "market_cap": market_cap,
+                "price_change_24h": price_change_24h,
+                "market_cap_rank": market_cap_rank,
                 "forecast": forecast,
                 "technical": technical_result,
                 "sentiment": sentiment_result,
