@@ -30,69 +30,67 @@ class CryptoAnalyzer:
         self.technical_analyzer = TechnicalAnalyzer()
         self.sentiment_analyzer = NewsAnalyzer()
 
-        # Removed old PricePredictor()
         self.prediction_engine = None
-
         self.adjuster = PredictionAdjuster()
         self.decision_engine = DecisionEngine(risk_tolerance=0.6, use_gpt=True)
 
     def analyze(self, symbol: str, user_input: str) -> Dict:
-    try:
-        self.prediction_engine = HybridPredictor(symbol=symbol)
+        try:
+            self.prediction_engine = HybridPredictor(symbol=symbol)
 
-        market_data = self.data_fetcher.fetch_crypto_data(symbol)
-        if not market_data:
-            return {"status": "error", "symbol": symbol, "message": f"Failed to fetch live data for {symbol}"}
+            market_data = self.data_fetcher.fetch_crypto_data(symbol)
+            if not market_data:
+                return {"status": "error", "symbol": symbol, "message": f"Failed to fetch live data for {symbol}"}
 
-        historical_df = self.data_fetcher.fetch_historical_data(symbol, days=30)
-        if historical_df.empty:
-            return {"status": "error", "symbol": symbol, "message": f"Failed to fetch historical data for {symbol}"}
+            historical_df = self.data_fetcher.fetch_historical_data(symbol, days=30)
+            if historical_df.empty:
+                return {"status": "error", "symbol": symbol, "message": f"Failed to fetch historical data for {symbol}"}
 
-        technical_result = self.technical_analyzer.analyze(historical_df)
-        sentiment_result = self.sentiment_analyzer.analyze(symbol)
+            technical_result = self.technical_analyzer.analyze(historical_df)
+            sentiment_result = self.sentiment_analyzer.analyze(symbol)
 
-        # Hybrid prediction
-        forecast = self.prediction_engine.predict(historical_df)
-        if forecast is None:
-            self.prediction_engine.train_or_load(historical_df)
+            # Hybrid prediction
             forecast = self.prediction_engine.predict(historical_df)
-        forecast = self.adjuster.adjust(forecast, market_data)
+            if forecast is None:
+                self.prediction_engine.train_or_load(historical_df)
+                forecast = self.prediction_engine.predict(historical_df)
+            forecast = self.adjuster.adjust(forecast, market_data)
 
-        confidence_scores = {"overall_confidence": technical_result.get("confidence", 50)}
-        recommendation = self.decision_engine.make_decision(
-            technical=technical_result,
-            sentiment=sentiment_result,
-            confidence=confidence_scores,
-            market_data=market_data
-        )
+            confidence_scores = {"overall_confidence": technical_result.get("confidence", 50)}
+            recommendation = self.decision_engine.make_decision(
+                technical=technical_result,
+                sentiment=sentiment_result,
+                confidence=confidence_scores,
+                market_data=market_data
+            )
 
-        current_price = market_data.get("market_data", {}).get("current_price", 0.0)
-        market_cap = market_data.get("market_data", {}).get("market_cap", 0)
-        price_change_24h = market_data.get("market_data", {}).get("price_change_24h", 0.0)
-        market_cap_rank = market_data.get("market_cap_rank", 0)
+            current_price = market_data.get("market_data", {}).get("current_price", 0.0)
+            market_cap = market_data.get("market_data", {}).get("market_cap", 0)
+            price_change_24h = market_data.get("market_data", {}).get("price_change_24h", 0.0)
+            market_cap_rank = market_data.get("market_cap_rank", 0)
 
-        result = {
-            "symbol": symbol.upper(),
-            "current_price": current_price,
-            "market_cap": market_cap,
-            "price_change_24h": price_change_24h,
-            "market_cap_rank": market_cap_rank,
-            "forecast": forecast or [],
-            "technical": technical_result,
-            "sentiment": sentiment_result,
-            "recommendation": recommendation,
-            "risk_management": {
-                "stop_loss": recommendation.get("stop_loss"),
-                "take_profit": recommendation.get("take_profit"),
-                "position_size": recommendation.get("position_size"),
-                "support_level": technical_result.get("support_level"),
-                "resistance_level": technical_result.get("resistance_level"),
-                "volatility_30d": technical_result.get("volatility_30d"),
-            },
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        return result
+            result = {
+                "symbol": symbol.upper(),
+                "current_price": current_price,
+                "market_cap": market_cap,
+                "price_change_24h": price_change_24h,
+                "market_cap_rank": market_cap_rank,
+                "forecast": forecast or [],
+                "technical": technical_result,
+                "sentiment": sentiment_result,
+                "recommendation": recommendation,
+                "risk_management": {
+                    "stop_loss": recommendation.get("stop_loss"),
+                    "take_profit": recommendation.get("take_profit"),
+                    "position_size": recommendation.get("position_size"),
+                    "support_level": technical_result.get("support_level"),
+                    "resistance_level": technical_result.get("resistance_level"),
+                    "volatility_30d": technical_result.get("volatility_30d"),
+                },
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            return result
 
-    except Exception as e:
-        logger.error(f"Analysis failed for {symbol}: {e}", exc_info=True)
-        return {"status": "error", "symbol": symbol, "message": str(e)}
+        except Exception as e:
+            logger.error(f"Analysis failed for {symbol}: {e}", exc_info=True)
+            return {"status": "error", "symbol": symbol, "message": str(e)}
