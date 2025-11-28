@@ -1,13 +1,10 @@
-"""
-CryptoAnalyzer: Performs analysis on cryptocurrencies using live API data
-"""
 import logging
 from typing import Dict
 from datetime import datetime
 
 from data_fetcher import DataFetcher
 from technical_analyzer import TechnicalAnalyzer
-from sentiment_analyzer import SentimentAnalyzer, NewsAnalyzer
+from sentiment_analyzer import NewsAnalyzer
 from prediction_engine import HybridPredictor, PredictionAdjuster
 from analysis_engine import DecisionEngine
 from config import Config
@@ -20,7 +17,7 @@ class ResultFormatter:
         try:
             return {"status": "success", "data": result}
         except Exception as e:
-            logger.error(f"Failed to format analysis: {e}")
+            logger.error(f"Failed to format analysis: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
 
@@ -34,18 +31,33 @@ class CryptoAnalyzer:
         self.adjuster = PredictionAdjuster()
         self.decision_engine = DecisionEngine(risk_tolerance=0.6, use_gpt=True)
 
-    def analyze(self, symbol: str, user_input: str) -> Dict:
+    def analyze(self, symbol: str = None, user_input: str = "") -> Dict:
+        # Ensure symbol is always defined
+        symbol = (symbol or user_input or "UNKNOWN").strip().upper()
+
         try:
+            # Initialize predictor
             self.prediction_engine = HybridPredictor(symbol=symbol)
 
+            # Fetch market data
             market_data = self.data_fetcher.fetch_crypto_data(symbol)
             if not market_data:
-                return {"status": "error", "symbol": symbol, "message": f"Failed to fetch live data for {symbol}"}
+                return {
+                    "status": "error",
+                    "symbol": symbol,
+                    "message": f"Failed to fetch live data for {symbol}"
+                }
 
+            # Fetch historical data
             historical_df = self.data_fetcher.fetch_historical_data(symbol, days=30)
             if historical_df.empty:
-                return {"status": "error", "symbol": symbol, "message": f"Failed to fetch historical data for {symbol}"}
+                return {
+                    "status": "error",
+                    "symbol": symbol,
+                    "message": f"Failed to fetch historical data for {symbol}"
+                }
 
+            # Technical and sentiment analysis
             technical_result = self.technical_analyzer.analyze(historical_df)
             sentiment_result = self.sentiment_analyzer.analyze(symbol)
 
@@ -56,6 +68,7 @@ class CryptoAnalyzer:
                 forecast = self.prediction_engine.predict(historical_df)
             forecast = self.adjuster.adjust(forecast, market_data)
 
+            # Decision making
             confidence_scores = {"overall_confidence": technical_result.get("confidence", 50)}
             recommendation = self.decision_engine.make_decision(
                 technical=technical_result,
@@ -64,17 +77,14 @@ class CryptoAnalyzer:
                 market_data=market_data
             )
 
-            current_price = market_data.get("market_data", {}).get("current_price", 0.0)
-            market_cap = market_data.get("market_data", {}).get("market_cap", 0)
-            price_change_24h = market_data.get("market_data", {}).get("price_change_24h", 0.0)
-            market_cap_rank = market_data.get("market_cap_rank", 0)
-
+            # Extract market metrics safely
+            market_info = market_data.get("market_data", {})
             result = {
-                "symbol": symbol.upper(),
-                "current_price": current_price,
-                "market_cap": market_cap,
-                "price_change_24h": price_change_24h,
-                "market_cap_rank": market_cap_rank,
+                "symbol": symbol,
+                "current_price": market_info.get("current_price", 0.0),
+                "market_cap": market_info.get("market_cap", 0),
+                "price_change_24h": market_info.get("price_change_24h", 0.0),
+                "market_cap_rank": market_data.get("market_cap_rank", 0),
                 "forecast": forecast or [],
                 "technical": technical_result,
                 "sentiment": sentiment_result,
@@ -92,5 +102,7 @@ class CryptoAnalyzer:
             return result
 
         except Exception as e:
-            logger.error(f"Analysis failed for {symbol}: {e}", exc_info=True)
-            return {"status": "error", "symbol": symbol, "message": str(e)}
+            # Use a fallback symbol in logging
+            safe_symbol = symbol or "UNKNOWN"
+            logger.error(f"Analysis failed for {safe_symbol}: {e}", exc_info=True)
+            return {"status": "error", "symbol": safe_symbol, "message": str(e)}
