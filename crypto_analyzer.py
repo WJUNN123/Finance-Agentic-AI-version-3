@@ -26,7 +26,7 @@ class CryptoAnalyzer:
     def __init__(self):
         self.data_fetcher = DataFetcher()
         self.technical_analyzer = TechnicalAnalyzer()
-        self.sentiment_analyzer = SentimentAnalyzer(news_analyzer=NewsAnalyzer())
+        self.sentiment_analyzer = NewsAnalyzer()
         self.prediction_engine = PricePredictor()
         self.adjuster = PredictionAdjuster()
         self.decision_engine = DecisionEngine(risk_tolerance=0.6, use_gpt=True)
