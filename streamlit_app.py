@@ -207,35 +207,38 @@ def main():
                     st.error(f"Analysis failed: {formatted_result['message']}")
                     return
 
-                data = formatted_result['data']
+                data = formatted_result.get('data', {})
+
+                # Safe retrievals
+                symbol = data.get('symbol', 'UNKNOWN')
+                current_price = data.get('current_price', 0.0)
+                price_change = data.get('price_change_24h', 0.0)
+                recommendation = data.get('recommendation', {})
+                confidence = recommendation.get('confidence', 50.0)
+                confidence_level = recommendation.get('confidence_level', 'Medium')
+                risk_management = data.get('risk_management', {})
+                vol = risk_management.get('volatility_30d', 0.0)
+                market_cap = data.get('market_cap', 0)
+                market_rank = data.get('market_cap_rank', 0)
 
                 # Metrics
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric(
-                        f"{data['symbol']} Price",
-                        f"${data['current_price']:,.2f}",
-                        f"{data['price_change_24h']:+.2f}%"
-                    )
-
+                    st.metric(f"{symbol} Price", f"${current_price:,.2f}", f"{price_change:+.2f}%")
                 with col2:
-                    market_cap = data['market_cap']
                     if market_cap > 1e9:
                         cap = f"${market_cap/1e9:.1f}B"
                     elif market_cap > 1e6:
                         cap = f"${market_cap/1e6:.1f}M"
                     else:
                         cap = f"${market_cap:,.0f}"
-                    st.metric("Market Cap", cap, f"Rank #{data['market_cap_rank']}")
-
+                    st.metric("Market Cap", cap, f"Rank #{market_rank}")
                 with col3:
-                    vol = data['risk_management']['volatility_30d']
                     st.metric("30D Volatility", f"{vol:.1f}%", "High" if vol > 70 else "Medium" if vol > 40 else "Low")
-
                 with col4:
-                    st.metric("Overall Confidence", f"{data['recommendation']['confidence']:.1f}%", data['recommendation']['confidence_level'])
+                    st.metric("Overall Confidence", f"{confidence:.1f}%", confidence_level)
 
-                display_recommendation_card(data['recommendation'])
+                display_recommendation_card(recommendation)
 
                 # ---- TABS ----
                 tab1, tab2, tab3, tab4 = st.tabs([
@@ -248,33 +251,29 @@ def main():
                 # TAB 1 — Analysis Summary
                 with tab1:
                     st.subheader("💡 Analysis Summary")
-                    st.write(data['recommendation']['reasoning'])
+                    st.write(recommendation.get('reasoning', 'No reasoning available.'))
 
                     col1, col2 = st.columns(2)
-
                     with col1:
                         st.subheader("🛡️ Risk Management")
-                        r = data['risk_management']
-                        if r['stop_loss']: st.write(f"🔻 **Stop Loss**: ${r['stop_loss']:,.2f}")
-                        if r['take_profit']: st.write(f"🎯 **Take Profit**: ${r['take_profit']:,.2f}")
-                        if r['support_level']: st.write(f"📊 **Support Level**: ${r['support_level']:,.2f}")
-                        if r['resistance_level']: st.write(f"📈 **Resistance Level**: ${r['resistance_level']:,.2f}")
-                        if data['recommendation']['position_size'] > 0:
-                            st.write(f"💰 **Suggested Position Size**: {data['recommendation']['position_size']}%")
-
-                    # Removed Confidence Breakdown ----- (per your requirement)
+                        r = risk_management
+                        if r.get('stop_loss'): st.write(f"🔻 **Stop Loss**: ${r['stop_loss']:,.2f}")
+                        if r.get('take_profit'): st.write(f"🎯 **Take Profit**: ${r['take_profit']:,.2f}")
+                        if r.get('support_level'): st.write(f"📊 **Support Level**: ${r['support_level']:,.2f}")
+                        if r.get('resistance_level'): st.write(f"📈 **Resistance Level**: ${r['resistance_level']:,.2f}")
+                        if recommendation.get('position_size', 0) > 0:
+                            st.write(f"💰 **Suggested Position Size**: {recommendation.get('position_size')}%")
 
                 # TAB 2 — Forecast
                 with tab2:
                     st.subheader("🔮 7-Day Price Forecast")
-
-                    if data['forecast']:
+                    if data.get('forecast'):
                         hist = analyzer.data_fetcher.fetch_historical_data(symbol, days=30)
-                        chart = create_price_chart(hist, data['forecast'], data['symbol'])
+                        chart = create_price_chart(hist, data['forecast'], symbol)
                         st.plotly_chart(chart, use_container_width=True)
 
                         st.subheader("📅 Detailed Forecast")
-                        df = create_forecast_table(data['forecast'], data['current_price'])
+                        df = create_forecast_table(data['forecast'], current_price)
                         st.dataframe(df, use_container_width=True)
                     else:
                         st.warning("Forecast data not available.")
@@ -282,20 +281,17 @@ def main():
                 # TAB 3 — Technical Analysis
                 with tab3:
                     st.subheader("⚡ Technical Analysis")
-                    tech = data['technical']
-
+                    tech = data.get('technical', {})
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.metric("RSI", f"{tech['rsi']:.1f}", tech['rsi_signal'])
+                        st.metric("RSI", f"{tech.get('rsi',0):.1f}", tech.get('rsi_signal','N/A'))
                     with col2:
-                        st.metric("MACD Signal", tech['macd_signal'])
+                        st.metric("MACD Signal", tech.get('macd_signal','N/A'))
                     with col3:
-                        st.metric("Market Regime", tech['market_regime'].title())
-
+                        st.metric("Market Regime", tech.get('market_regime','N/A').title())
                     st.write("**Technical Summary:**")
-                    st.write(f"- **Trend**: {tech['trend']}")
-                    st.write(f"- **Technical Signal**: {tech['technical_signal']}")
-
+                    st.write(f"- **Trend**: {tech.get('trend','N/A')}")
+                    st.write(f"- **Technical Signal**: {tech.get('technical_signal','N/A')}")
                     hist_data = analyzer.data_fetcher.fetch_historical_data(symbol, days=30)
                     if not hist_data.empty:
                         fig_tech = make_subplots(
@@ -304,34 +300,28 @@ def main():
                             vertical_spacing=0.1,
                             row_heights=[0.5, 0.25, 0.25]
                         )
-
-                        fig_tech.add_trace(
-                            go.Scatter(x=hist_data.index, y=hist_data['price'], name='Price'),
-                            row=1, col=1
-                        )
-
+                        fig_tech.add_trace(go.Scatter(x=hist_data.index, y=hist_data['price'], name='Price'), row=1, col=1)
                         st.plotly_chart(fig_tech, use_container_width=True)
 
                 # TAB 4 — Sentiment
                 with tab4:
                     st.subheader("📰 Market Sentiment")
-                    sentiment = data['sentiment']
-
+                    sentiment = data.get('sentiment', {})
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.metric("Sentiment Score", f"{sentiment['score']:.3f}", sentiment['label'])
+                        st.metric("Sentiment Score", f"{sentiment.get('score',0):.3f}", sentiment.get('label','N/A'))
                     with col2:
-                        st.metric("News Headlines", sentiment['headline_count'])
-
-                    if sentiment['headlines']:
+                        st.metric("News Headlines", sentiment.get('headline_count',0))
+                    headlines = sentiment.get('headlines',[])
+                    if headlines:
                         st.subheader("📰 Recent Headlines")
-                        for i, h in enumerate(sentiment['headlines'], 1):
+                        for i, h in enumerate(headlines, 1):
                             st.write(f"{i}. {h}")
                     else:
                         st.info("No recent headlines available.")
 
                 st.markdown("---")
-                st.markdown(f"*Analysis completed at {data['timestamp']}*")
+                st.markdown(f"*Analysis completed at {data.get('timestamp','N/A')}*")
                 st.markdown("*Educational purpose only — not financial advice.*")
 
             except Exception as e:
