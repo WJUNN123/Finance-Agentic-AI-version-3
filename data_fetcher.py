@@ -24,13 +24,6 @@ class DataFetcher:
     def _get_realtime_data(self, symbol: str) -> Dict:
         """Fetch live data from CoinGecko API"""
         coingecko_id = SUPPORTED_CRYPTOS.get(symbol.lower(), symbol.lower())
-        cache_key = f"realtime_{coingecko_id}"
-
-        # Check cache
-        if cache_key in self.realtime_cache:
-            if (datetime.now() - self.realtime_cache[cache_key]['timestamp']).seconds < 300:
-                return self.realtime_cache[cache_key]['data']
-
         try:
             url = f"{Config.COINGECKO_API_URL}/simple/price"
             params = {
@@ -43,20 +36,32 @@ class DataFetcher:
             resp = requests.get(url, params=params, timeout=Config.REQUEST_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
-            if coingecko_id in data:
-                realtime = {
-                    'current_price': data[coingecko_id]['usd'],
-                    'price_change_24h': data[coingecko_id].get('usd_24h_change', 0),
-                    'market_cap': data[coingecko_id].get('usd_market_cap', 0),
-                    'volume_24h': data[coingecko_id].get('usd_24h_vol', 0),
-                    'market_cap_rank': MARKET_RANKS.get(symbol.lower())
-                }
-                self.realtime_cache[cache_key] = {'data': realtime, 'timestamp': datetime.now()}
-                return realtime
+            usd_data = data.get(coingecko_id, {})
+
+            realtime = {
+                'current_price': usd_data.get('usd', 0.0),
+                'price_change_24h': usd_data.get('usd_24h_change', 0.0),
+                'market_cap': usd_data.get('usd_market_cap', 0),
+                'volume_24h': usd_data.get('usd_24h_vol', 0),
+                'market_cap_rank': MARKET_RANKS.get(symbol.upper(), 0)
+            }
+
+            # Cache the realtime data
+            cache_key = f"realtime_{coingecko_id}"
+            self.realtime_cache[cache_key] = {'data': realtime, 'timestamp': datetime.now()}
+            return realtime
+
         except Exception as e:
             logger.warning(f"Failed to fetch realtime data for {symbol}: {e}")
 
-        return {}
+        # Always return defaults if API fails
+        return {
+            'current_price': 0.0,
+            'price_change_24h': 0.0,
+            'market_cap': 0,
+            'volume_24h': 0,
+            'market_cap_rank': MARKET_RANKS.get(symbol.upper(), 0)
+        }
 
     def fetch_crypto_data(self, symbol: str) -> Dict:
         cache_key = f"crypto_{symbol}"
@@ -64,9 +69,16 @@ class DataFetcher:
             return self.cache[cache_key]['data']
 
         data = self._get_realtime_data(symbol)
-        if data:
-            self.cache[cache_key] = {'data': {'market_data': data, 'market_cap_rank': data.get('market_cap_rank')}, 'timestamp': datetime.now()}
-        return self.cache.get(cache_key, {}).get('data', {})
+
+        # Always wrap in 'market_data' to match CryptoAnalyzer expectations
+        self.cache[cache_key] = {
+            'data': {
+                'market_data': data,
+                'market_cap_rank': data.get('market_cap_rank', 0)
+            },
+            'timestamp': datetime.now()
+        }
+        return self.cache[cache_key]['data']
 
     def fetch_historical_data(self, symbol: str, days: int = 30) -> pd.DataFrame:
         """Fetch historical price data via CoinGecko API"""
@@ -83,11 +95,11 @@ class DataFetcher:
             data = resp.json()
 
             df = pd.DataFrame({
-                'price': [p[1] for p in data['prices']],
-                'volume': [v[1] for v in data['total_volumes']],
-                'market_cap': [m[1] for m in data['market_caps']]
+                'price': [p[1] for p in data.get('prices', [])],
+                'volume': [v[1] for v in data.get('total_volumes', [])],
+                'market_cap': [m[1] for m in data.get('market_caps', [])]
             })
-            df.index = pd.to_datetime([p[0] for p in data['prices']], unit='ms')
+            df.index = pd.to_datetime([p[0] for p in data.get('prices', [])], unit='ms')
             df.index.name = 'date'
             df['high'] = df['price']
             df['low'] = df['price']
